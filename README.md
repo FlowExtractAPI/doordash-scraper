@@ -99,17 +99,30 @@ https://www.youtube.com/watch?v=q5PGi7bmdXw
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `address` | string | ✅ | Chicago, IL | Delivery address for location-aware results. **Important:** DoorDash results depend on location  always set this. |
 | `startUrls` | array | ✅ |  | One or more DoorDash search or store URLs |
-| `maxResults` | integer | ❌ | 10 | Max stores to scrape per search URL. `0` = no limit. Ignored in store mode. |
+| `address` | string | ❌ | `233 S Wacker Dr, Chicago, IL 60606` | Full street address the results are scoped to. See below  this decides which stores you get. |
+| `maxResults` | integer | ❌ | 10 | Max stores per URL. `0` = no limit. Ignored in store mode. Run total = this × number of URLs. |
+| `includeMenu` | boolean | ❌ | true | Keep every menu category and item. Turn off for a much smaller dataset  featured items are kept either way. |
 | `fetchReviews` | boolean | ❌ | false | Fetch customer reviews for each store |
 | `maxReviews` | integer | ❌ | 10 | Max reviews per store. `0` = all reviews. Only used when `fetchReviews` is enabled. |
 
 ### Address Field  Why It Matters
 
-DoorDash results are entirely location-dependent. A search for "pizza" in New York returns completely different stores from the same search in Los Angeles. If you leave this field blank, the Actor defaults to **Chicago, IL** and you may get results from the wrong area.
+DoorDash results are entirely location-dependent. A search for "pizza" in New York returns completely different stores from the same search in Los Angeles  along with different fees, delivery ETAs and open/closed status.
 
-Always set `address` to match the city or neighborhood you want to scrape.
+**Use a full street address.** DoorDash resolves this field through a street-address lookup, not a city lookup. A city name on its own is matched against nearby *business names* and can silently place your run in another state  `Chicago, IL` resolves to a business called "Chicago Illinois" in Bloomfield Hills, Michigan.
+
+| Input | What DoorDash actually uses |
+|-------|-----------------------------|
+| `Chicago, IL` | ❌ Bloomfield Hills, MI |
+| `Paris, France` | ❌ Santa Ana, CA |
+| `233 S Wacker Dr, Chicago, IL 60606` | ✅ Chicago, IL |
+
+Every run logs the location it actually used, and warns when the resolved area doesn't match what you typed  so you can always tell which city your data describes.
+
+DoorDash operates in the **US, Canada, Australia and New Zealand**. An address outside those falls back to the closest match DoorDash recognises.
+
+Leave the field blank to use the default Chicago street address.
 
 ### Supported URL Formats
 
@@ -120,6 +133,9 @@ Always set `address` to match the city or neighborhood you want to scrape.
 | Store (with slug) | `https://www.doordash.com/store/joes-pizza-new-york-145565` |
 | Store (numeric ID) | `https://www.doordash.com/store/145565` |
 | Store (full URL) | `https://www.doordash.com/store/145565?cursor=...` |
+| Locale-prefixed | `https://www.doordash.com/en-US/store/145565`  `https://www.doordash.com/en-CA/search/store/pizza` |
+| Without `https://` | `www.doordash.com/store/145565`  `/store/145565` |
+| Link to a file of URLs | Any public `.txt` with one DoorDash URL per line (the *Link to a file with URLs* option) |
 
 DoorDash filter parameters in the URL (star rating, price range, DashPass, ETA, etc.) are honored automatically.
 
@@ -402,6 +418,47 @@ All review records in a flat table  one row per customer review.
 
 ---
 
+## 💰 Pricing
+
+This Actor uses **pay-per-event** pricing: you pay for the records you actually receive, not for runtime. There is no platform-usage charge on top  compute is included in the prices below.
+
+### What you pay for
+
+| Event | When it is charged | Free | Bronze | Silver | Gold+ |
+|-------|--------------------|------|--------|--------|-------|
+| **Store Result** | One per store saved to the dataset | $0.006 | $0.004 | $0.003 | $0.002 |
+| **Customer Review** | One per review saved to the dataset | $0.001 | $0.0008 | $0.0006 | $0.0005 |
+
+Reviews are only charged when **Fetch reviews** is enabled.
+
+### What it costs in practice
+
+| What you want | Events | Free tier | Gold tier |
+|---------------|--------|-----------|-----------|
+| 100 stores, no reviews | 100 stores | **$0.60** | **$0.20** |
+| 1,000 stores, no reviews | 1,000 stores | **$6.00** | **$2.00** |
+| 100 stores + 10 reviews each | 100 stores + 1,000 reviews | **$1.60** | **$0.70** |
+| 1 store with all its reviews (~250) | 1 store + 250 reviews | **$0.256** | **$0.127** |
+
+### You are only charged for delivered records
+
+- A store is charged **once**, when its record is written to the dataset. Stores that turn out to be unavailable, blocked, or missing are skipped and **never charged**.
+- Duplicate stores across overlapping search URLs are removed before charging, so the same store is never billed twice in a run.
+- If a URL can't be used, the run ends with a short explanation record  and no charge.
+- `includeMenu` does not change the price. A store costs the same with or without its menu, so switch the menu off when you don't need it: the record drops from roughly 100 KB to 22 KB with no change to your bill.
+
+### Capping your spend
+
+Set **Max total charge** on the run and the Actor reads that limit *before* it starts fetching, then scrapes only what the budget covers rather than stopping part-way through.
+
+```
+Max total charge: $0.02  →  Budget guard: $0.02 covers 3 store(s) — lowering the target from 10 to 3
+```
+
+Every store you are charged for is delivered  the run stops at the limit, it never bills for a record it doesn't write.
+
+---
+
 ## ⚠️ Important Notes
 
 ### Data Accuracy
@@ -411,7 +468,7 @@ All review records in a flat table  one row per customer review.
 ### Review Extraction Behavior
 - When `fetchReviews` is disabled, no review records are pushed  not even preview reviews
 - When `fetchReviews` is enabled, up to `maxReviews` reviews are pushed per store (set to `0` for all)
-- Review fetching is billed separately from store detail extraction
+- Reviews are billed as their own event, separately from stores  see [Pricing](#-pricing)
 
 ### Legal Considerations
 This Actor extracts publicly available data from DoorDash. Users must:
